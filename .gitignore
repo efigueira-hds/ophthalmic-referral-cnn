@@ -1,0 +1,29 @@
+# Dataset - ficheiros grandes não vão para o GitHub
+ocular/
+dataset/
+*.zip
+*.tar.gz
+*.csv
+*.pdf
+*.md
+# Checkpoints e modelos treinados
+*.h5
+*.keras
+*.pkl
+*.pt
+*.pth
+saved_models/
+checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
