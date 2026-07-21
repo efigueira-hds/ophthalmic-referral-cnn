@@ -6,6 +6,11 @@ dataset/
 *.csv
 *.pdf
 *.md
+# Exceções cirúrgicas: só estes dois ficheiros, nunca um !*.csv/!*.md geral
+# (ocular_reports.csv tem relatórios clínicos sintéticos e tem de continuar
+# ignorado; resultados agregados e o relatório do batch são portfólio).
+!artifacts/results.csv
+!BATCH_2_REPORT.md
 # Checkpoints e modelos treinados
 *.h5
 *.keras
