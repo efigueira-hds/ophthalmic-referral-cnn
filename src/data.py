@@ -36,13 +36,12 @@ def load_images_from_folder(folder, label):
     images = []
     labels = []
     nomes = []
-    # sorted(): os.listdir order is filesystem-dependent and would silently
-    # break alignment between X_original and groups if images are re-uploaded.
+  
     for filename in sorted(os.listdir(folder)):
         img_path = os.path.join(folder, filename)
         img = Image.open(img_path).convert("RGB")
 
-        # Padding para quadrado sem distorção antes do resize
+        
         img = ImageOps.pad(img, (224, 224), color=(0, 0, 0))
 
         images.append(np.array(img))
