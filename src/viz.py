@@ -9,7 +9,6 @@ behavioural one.
 """
 import numpy as np
 import matplotlib.pyplot as plt
-import tensorflow as tf
 from sklearn.metrics import (
     confusion_matrix, classification_report, ConfusionMatrixDisplay,
     roc_curve, auc, precision_recall_curve, average_precision_score,
@@ -172,6 +171,7 @@ def show_grad_cam(model, image, class_names, last_conv_layer_name, base_model=No
     - base_model=<obj> -> modo Functional (EfficientNet, ResNet)
     """
     img_array = np.expand_dims(image.astype("float32"), axis=0)
+    import tensorflow as tf
 
     if base_model is None:
         last_conv_layer = model.get_layer(last_conv_layer_name)

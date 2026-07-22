@@ -22,6 +22,17 @@ verificação estática apenas.
 - **Estrutura:** os 6 ficheiros são nbformat 4.5 válidos.
 - **Resolução de nomes:** limpa exceto um fallback morto documentado (§2).
 
+## Correções aplicadas (pós-split, 2026-07-22)
+1. ✅ **Bug de indexação dos embeddings BERT** (`04`, §4): `X_bert_train`/
+   `X_bert_val` passam a indexar `X_bert_ordered` diretamente (índices absolutos),
+   eliminando o `IndexError`. Shapes inalterados (1541/522/507), pelo que o output
+   entregue continua correto.
+2. ✅ **Acoplamento a TensorFlow em `05`** (§2): `import tensorflow` deixou de
+   estar no topo de `src/viz.py` e passou a ser lazy-import dentro de
+   `show_grad_cam`. `05` deixa de arrastar TF — notebook CPU verdadeiramente leve.
+
+Pendente: nomes de camadas em `06` (§4), a confirmar numa sessão com os modelos.
+
 ---
 
 ## 1. Mapeamento célula → notebook
@@ -123,13 +134,13 @@ as chamadas passam `X_train_tl`/`y_train_tl` explicitamente, pelo que o ramo
 `else X_train` é código morto — nunca avaliado, sem `NameError` em runtime. Fica
 listado por honestidade; opção futura: remover o fallback nas cópias de 03/04.
 
-> **Nota de fronteira (não é um nome por resolver):** `05` importa `src.viz`, que
-> faz `import tensorflow` no topo do módulo. Nenhuma função usada por 05
+> **Nota de fronteira — ✅ RESOLVIDA (2026-07-22):** `05` importava `src.viz`, que
+> fazia `import tensorflow` no topo do módulo. Nenhuma função usada por 05
 > (`plot_test_confusion`, `plot_roc_pr_curves`,
 > `plot_sensitivity_specificity_threshold`) precisa de TF — só `show_grad_cam`.
-> Resultado: 05 arrasta TF como dependência transitiva de import, apesar de ser
-> um notebook CPU/leve. Não viola a fronteira de dados (só lê artefactos
-> committed). Sugestão futura: lazy-import de `tf` dentro de `show_grad_cam`.
+> `src/viz.py` passou a fazer lazy-import de `tf` dentro de `show_grad_cam`, pelo
+> que 05 já não arrasta TensorFlow. Fronteira de dados nunca foi violada (só lê
+> artefactos committed).
 
 ---
 
@@ -152,7 +163,7 @@ o Drive — 05 corre localmente a partir do repositório git. Fronteira intacta.
 
 ## 4. Células sem atribuição limpa, drops e achados
 
-### ⚠ Achado de correção (prioridade máxima) — `04`, célula dos splits BERT
+### ✅ Achado de correção (prioridade máxima) — `04`, célula dos splits BERT — RESOLVIDO (2026-07-22)
 ```python
 X_bert_trainval = X_bert_ordered[trainval_idx]
 X_bert_train = X_bert_trainval[train_idx]   # <-- índices ABSOLUTOS num array trainval
@@ -163,13 +174,14 @@ array completo (é assim que a célula 20 faz `X_original[train_idx]`). Aqui sã
 usados para indexar `X_bert_trainval` (tamanho ~trainval, ~2056), logo qualquer
 índice ≥ 2056 dá **`IndexError`**. O output actual da célula é **stale** — data de
 antes da extração para `src` (commit 3), quando os índices eram relativos. A
-célula foi **movida intacta** (não reescrita: fora do âmbito de um commit de
-split). Correção de uma linha para a sessão GPU:
+célula passou a indexar `X_bert_ordered` diretamente:
 ```python
 X_bert_train = X_bert_ordered[train_idx]
 X_bert_val   = X_bert_ordered[val_idx]
+X_bert_test  = X_bert_ordered[test_idx]
 ```
-(Não pude reproduzir localmente — exige listar o dataset, ausente nesta máquina.)
+O output entregue foi mantido (shapes 1541/522/507 idênticos pós-correção). Não
+reproduzido localmente — exige listar o dataset, ausente nesta máquina.
 
 ### Riscos de reconstrução em `06` (a confirmar na sessão GPU)
 - **Modelos não estão no git:** `*.keras` é gitignored. 06 corre localmente com os
