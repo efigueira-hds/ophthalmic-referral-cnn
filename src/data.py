@@ -7,11 +7,11 @@ original inline code -- same values, now importable and shared.
 """
 import os
 import re
-from pathlib import Path
-
+import shutil
 import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
+from pathlib import Path
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, recall_score
 from sklearn.preprocessing import label_binarize
@@ -131,6 +131,11 @@ def save_split_indices(path, split):
         val_idx=split["val_idx"],
     )
 
+def guardar_modelo(nome, models_dir, modelo):
+    destino = Path(models_dir) / f"{slug(nome)}.keras"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    modelo.save(destino)
+    return destino
 
 def load_split_indices(path):
     npz = np.load(path)
