@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image, ImageOps
 from pathlib import Path
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, recall_score
 from sklearn.preprocessing import label_binarize
@@ -134,7 +135,15 @@ def save_split_indices(path, split):
 def guardar_modelo(nome, models_dir, modelo):
     destino = Path(models_dir) / f"{slug(nome)}.keras"
     destino.parent.mkdir(parents=True, exist_ok=True)
-    modelo.save(destino)
+    try:
+        modelo.save(destino)
+    except Exception as e:
+        # Modelos com BERT embebido resistem à serialização .keras;
+        # cai para os pesos, que chegam para inferência e Grad-CAM.
+        print(f"  .save() falhou ({type(e).__name__}); a gravar só pesos.")
+        pesos = destino.with_suffix(".weights.h5")
+        modelo.save_weights(pesos)
+        return pesos
     return destino
 
 def load_split_indices(path):
@@ -220,147 +229,6 @@ def append_results_row(row, results_path):
     df.to_csv(results_path, index=False)
     return df
 
-def adicionar_modelo(nome, modelo, history, X_teste, X_treino=None, y_treino=None):
-    global modelos_treinados
-    X_tr = X_treino if X_treino is not None else X_train
-    y_tr = y_treino if y_treino is not None else y_train
-
-    # Congelar as previsões AGORA, enquanto o modelo está no estado que este
-    # nome descreve. Depois disto, mutações do objeto já não afectam a tabela.
-    proba_teste = modelo.predict(X_teste, verbose=0)
-    proba_treino = modelo.predict(X_tr, verbose=0)
-
-    # Guarda contra aliasing: dois modelos distintos não produzem previsões
-    # bit-a-bit idênticas em 507x3 floats. Se isto disparar, duas entradas
-    # estão a partilhar o mesmo objeto.
-    for outro_nome, _, _, _, _, _, outra_proba, _ in modelos_treinados:
-        if outra_proba.shape == proba_teste.shape and np.array_equal(outra_proba, proba_teste):
-            raise RuntimeError(
-                f"ALIASING: '{nome}' produz previsões idênticas a '{outro_nome}'. "
-                "Provavelmente é o mesmo objeto de modelo registado duas vezes "
-                "(ex.: fine-tuning aplicado in place ao modelo de feature extraction). "
-                "Cada condição precisa da sua própria instância."
-            )
-
-    caminho = PREDS_DIR / f"{data.slug(nome)}_proba.npy"
-    np.save(caminho, proba_teste)
-    np.save(PREDS_DIR / f"{data.slug(nome)}_train_proba.npy", proba_treino)
-
-    with open(HISTORY_DIR / f"{data.slug(nome)}.pkl", "wb") as f:
-        pickle.dump(history.history, f)
-
-    guardar_modelo(nome, MODELS_DIR, modelo)
-
-    # remover entrada anterior com o mesmo nome (evita duplicados ao re-correr)
-    modelos_treinados = [m for m in modelos_treinados if m[0] != nome]
-    modelos_treinados.append((
-        nome, modelo, history, X_teste, X_tr, y_tr, proba_teste, proba_treino,
-    ))
-    print(f"Adicionado: {nome}  (total: {len(modelos_treinados)})  -> {caminho.name}")
-
-
-def fine_tuning_grid_search(model, base_model, nome_modelo, phase1_weights):
-    """
-    Grid search sobre learning_rate e n_layers_unfrozen para fine-tuning.
-    Para cada combinação, parte sempre dos pesos da fase 1 (feature extraction)
-    para garantir comparação justa. Seleciona com base no F1-macro na validação.
-    """
-    learning_rates = [1e-4, 1e-5, 1e-6]
-    n_layers_list  = [10, 30, 50]
-
-    resultados = []
-
-    for lr, n_layers in product(learning_rates, n_layers_list):
-        tf.keras.utils.set_random_seed(SEED)
-        print(f"=== {nome_modelo} | LR={lr}  layers={n_layers} ===")
-
-        # restaurar pesos da fase 1 para partir do mesmo ponto em cada iteração
-        model.set_weights(phase1_weights)
-
-        # descongelar apenas as últimas n_layers da base convolucional
-        base_model.trainable = True
-        for layer in base_model.layers[:-n_layers]:
-            layer.trainable = False
-
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
-            loss="sparse_categorical_crossentropy",
-            metrics=["accuracy"]
-        )
-
-        es = EarlyStopping(monitor="val_loss", patience=3, restore_best_weights=True)
-
-        model.fit(
-            X_train_tl, y_train_tl,
-            validation_data=(X_val_tl, y_val_tl),
-            epochs=10,
-            batch_size=32,
-            class_weight=class_weight,
-            callbacks=[es],
-            verbose=0
-        )
-
-        # avaliar na validação — critério de selecção: F1-macro
-        y_pred  = np.argmax(model.predict(X_val_tl, verbose=0), axis=1)
-        f1m     = f1_score(y_val_tl, y_pred, average="macro")
-        rec_cat = recall_score(y_val_tl, y_pred, labels=[0], average="macro")
-
-        resultados.append({
-            "lr": lr, "n_layers": n_layers,
-            "f1_macro": float(f1m), "recall_catarata": float(rec_cat)
-        })
-        print(f"   F1-macro={f1m:.4f}  recall_catarata={rec_cat:.4f}")
-
-        # congelar novamente antes da próxima iteração
-        base_model.trainable = False
-
-    # ordenar por F1-macro e mostrar ranking completo
-    resultados.sort(key=lambda r: r["f1_macro"], reverse=True)
-    print(f"\n===== RANKING — {nome_modelo} =====")
-    for r in resultados:
-        print(f"F1={r['f1_macro']:.4f}  rec_cat={r['recall_catarata']:.4f}  <-  LR={r['lr']}  layers={r['n_layers']}")
-
-    return resultados[0]  # devolver os melhores hiperparâmetros
 
 
 
-def aplicar_melhor_fine_tuning(model, base_model, best_params, nome_modelo, phase1_weights):
-    """
-    Treina o modelo final com os melhores hiperparâmetros encontrados no grid search.
-    Restaura os pesos da fase 1, descongela as últimas n_layers e treina com LR reduzido.
-    """
-    # restaurar pesos da feature extraction para partir do mesmo ponto
-    model.set_weights(phase1_weights)
-
-    # descongelar apenas as últimas n_layers da base
-    base_model.trainable = True
-    for layer in base_model.layers[:-best_params["n_layers"]]:
-        layer.trainable = False
-
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=best_params["lr"]),
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"]
-    )
-
-    es = EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
-
-    nome_final = f"{nome_modelo} (fine-tuned)"
-    checkpoint = ModelCheckpoint(
-        filepath=str(MODELS_DIR / f"{data.slug(nome_final)}.keras"),
-        monitor="val_loss",
-        save_best_only=True,
-    )
-
-    history = model.fit(
-        X_train_tl, y_train_tl,
-        validation_data=(X_val_tl, y_val_tl),
-        epochs=20,
-        batch_size=32,
-        class_weight=class_weight,
-        callbacks=[es, checkpoint],
-        verbose=2
-    )
-
-    adicionar_modelo(nome_final, model, history, X_test_tl, X_train_tl, y_train_tl)
-    return history
