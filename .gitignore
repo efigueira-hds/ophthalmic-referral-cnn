@@ -5,7 +5,7 @@ dataset/
 *.tar.gz
 *.csv
 *.pdf
-*.md
+
 # Exceções cirúrgicas: só estes dois ficheiros, nunca um !*.csv/!*.md geral
 # (ocular_reports.csv tem relatórios clínicos sintéticos e tem de continuar
 # ignorado; resultados agregados e o relatório do batch são portfólio).
