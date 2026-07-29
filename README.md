@@ -8,7 +8,7 @@ This README is a straight account of what was built, what the numbers actually s
 
 The scenario is a **hospital referral filter**: a queue of ophthalmic exams comes in, and the system's job is to flag the ones that likely need a specialist (Cataract or Diabetic Retinopathy) and let the clearly Normal ones through without adding to the specialist's workload.
 
-In that setting, the two error types are not equally bad:
+In that setting, the two error types are not equally bad:vv
 - **False negative** (a diseased eye labeled Normal) — the serious one. The patient doesn't get referred and the condition goes undiagnosed.
 - **False positive** (a normal eye sent for review) — a wasted specialist slot, but not a harm to the patient.
 
@@ -22,7 +22,7 @@ That asymmetry drives most of the design decisions below: class weighting, choos
 - **Split is at the patient level, not the image level**, using `StratifiedGroupKFold` (~60/20/20, train/val/test). This matters: if a random image-level split were used, the two images of the same patient could land in different sets, and since both eyes of one patient look very similar, that would leak information into validation/test and inflate every metric. The split was verified to have zero patient overlap between train, validation, and test.
 - Test set: 507 images (82 Cataract / 218 Diabetic Retinopathy / 207 Normal). All numbers in the results section below are computed on this held-out set.
 - A second, synthetic data source is also used in the multimodal notebook: a short clinical-report sentence per image (`ocular_reports.csv`), generated from the image's own label. More on why that matters below.
-- Raw images and reports aren't in this repo (see `.gitignore`) — only code and the derived, non-sensitive artifacts (`artifacts/results.csv`, split indices, prediction arrays) are versioned.
+- Raw images and reports aren't in this repo (see `.gitignore`)— only code and the derived, non-sensitive artifacts (`artifacts/results.csv`, split indices, prediction arrays) are versioned.
 
 ## What was built (notebook by notebook)
 
@@ -36,6 +36,24 @@ The project is organized as six sequential Jupyter notebooks under `notebooks/`,
 6. **`06_explainability.ipynb`** — Grad-CAM visualizations for the regularized CNN, fine-tuned EfficientNetB0, and fine-tuned ResNet50, to sanity-check that the models are looking at plausible regions of the eye rather than artifacts.
 
 A small shared module (`src/`) factors out logic used by more than one notebook: dataset loading and the patient-grouped split (`data.py`), Colab-vs-local path handling (`bootstrap.py`), and the plotting/Grad-CAM functions (`viz.py`). Every notebook fixes random seeds (Python, NumPy, TensorFlow) for reproducibility.
+
+## Project structure
+
+```
+notebooks/
+  01_eda.ipynb                 EDA, integrity checks, patient-grouped split
+  02_cnn_from_scratch.ipynb    Baseline + regularized CNN
+  03_transfer_learning.ipynb   EfficientNetB0 / ResNet50, feature extraction + fine-tuning
+  04_multimodal.ipynb          Image + text fusion, text-only baseline
+  05_clinical_evaluation.ipynb Confusion matrices, ROC/PR, comparison table (no GPU needed)
+  06_explainability.ipynb      Grad-CAM
+src/
+  bootstrap.py   Colab vs local environment/path handling
+  data.py        Dataset loading, patient split, results-table helpers
+  viz.py         Plotting and Grad-CAM
+artifacts/
+  results.csv    Committed comparison table (the source of the numbers above)
+```
 
 ## Results (test set, 507 images)
 
@@ -56,16 +74,16 @@ All numbers below are directly from `artifacts/results.csv`, the table each prod
 **Reading it honestly:**
 - The from-scratch CNNs (baseline, class-weighted, regularized) plateau around 93–94% accuracy but visibly struggle on Cataract recall (77–83%), the minority class — exactly the failure mode the class-weighting and F1-macro selection were meant to catch, and exactly the error type that matters most for this use case.
 - Transfer learning is a clear, consistent step up. Fine-tuning helps both backbones (ResNet50: 93.9% → 96.8% accuracy; EfficientNetB0: 94.1% → 97.6%).
-- **EfficientNetB0 (fine-tuned) is the best image-only model on every single metric** in the table, including a higher AUC and Cataract recall than fine-tuned ResNet50. ResNet50 was still the backbone carried into the multimodal branch — that choice was made based on a quick visual check with Grad-CAM (its heatmaps were easier to read and explain) and familiarity, not on this comparison table. It's a reasonable engineering call, but worth flagging as a softer, more subjective criterion than the F1-macro benchmark used to pick everything else in the project — and it happened to land on the backbone that scores lower on every metric above.
-- The multimodal row (99.2% accuracy) looks like the best model by a wide margin — and that's exactly the number to be suspicious of. See below.
+- **EfficientNetB0 (fine-tuned) is the best image-only model on every single metric** in the table, including a higher AUC and Cataract recall than fine-tuned ResNet50. ResNet50 was still the backbone carried into the multimodal branch — that choice was made based on a quick visual check with Grad-CAM (its heatmaps were easier to read and explain) and familiarity, not on this comparison table. 
+- The multimodal row (99.2% accuracy) looks like the best model by a wide margin — and that's exactly the number to be suspicious of. So we investigated below.
 
-## The multimodal result comes with an asterisk
+## The multimodal result comes with a caveat
 
 The "clinical reports" fed into the multimodal model and the text-only baseline are **synthetic**: they were generated from each image's own label, not written by a clinician looking at the image. That means the report text can leak the diagnosis almost directly, independent of anything the model learns about the image.
 
 The text-only baseline (TF-IDF + Logistic Regression, no image input at all) makes that concrete: **92.9% accuracy and 93.9% Cataract recall using text alone**, close to the fine-tuned image models and actually *higher* on Cataract recall than any of them. If a model with zero access to pixels can nearly match the best image model, a chunk of the multimodal model's 99.2% is very likely coming from the text branch reading a paraphrased label rather than from genuine image-text reasoning.
 
-This isn't a case of the project hiding a weak result — the text-only baseline notebook cell exists specifically to expose this risk, with that reasoning written out in the notebook itself. But it does mean **the multimodal number shouldn't be quoted as "the model," full stop** — it's a result that needs real (clinician-written) reports to mean what it appears to mean. The image-only, fine-tuned EfficientNetB0 (97.6% accuracy, 90.2% Cataract recall) is the more trustworthy number to lead with.
+This isn't a case of the project hiding a weak result — the text-only baseline notebook cell exists specifically to expose this risk. But it does mean **the multimodal number shouldn't be quoted as "the model"** — it's a result that needs real (clinician-written) reports to mean what it appears to mean. The image-only, fine-tuned EfficientNetB0 (97.6% accuracy, 90.2% Cataract recall) is the more trustworthy number to lead with.
 
 ## Clinical impact, quantified
 
@@ -90,26 +108,10 @@ Two honest caveats on these numbers: (1) they're arithmetic on the existing test
 
 TensorFlow/Keras (CNNs, EfficientNetB0, ResNet50), PyTorch + Hugging Face Transformers (BERTimbau), scikit-learn (metrics, TF-IDF baseline, patient-grouped stratified split), pandas/NumPy, Matplotlib. Developed on Google Colab (GPU) with Google Drive as the artifact store; `05_clinical_evaluation.ipynb` is the one notebook designed to also run locally, CPU-only, off committed artifacts.
 
-## Project structure
 
-```
-notebooks/
-  01_eda.ipynb                 EDA, integrity checks, patient-grouped split
-  02_cnn_from_scratch.ipynb    Baseline + regularized CNN
-  03_transfer_learning.ipynb   EfficientNetB0 / ResNet50, feature extraction + fine-tuning
-  04_multimodal.ipynb          Image + text fusion, text-only baseline
-  05_clinical_evaluation.ipynb Confusion matrices, ROC/PR, comparison table (no GPU needed)
-  06_explainability.ipynb      Grad-CAM
-src/
-  bootstrap.py   Colab vs local environment/path handling
-  data.py        Dataset loading, patient split, results-table helpers
-  viz.py         Plotting and Grad-CAM
-artifacts/
-  results.csv    Committed comparison table (the source of the numbers above)
-```
 
 ## Current limitations / honest state of the repo
 
 - The dataset and trained model weights aren't in the repo (size and — for the images — unclear redistribution rights), so the notebooks can't be re-run end-to-end without separately providing `ocular/` and `ocular_reports.csv`.
 - The repo is mid-refactor (see commit history): shared logic is being pulled out of a single monolithic notebook into `src/`.
-- Several sections are explicitly marked as placeholders for future work, directly in the notebooks: justifying a non-default decision threshold, collapsing Cataract + Diabetic Retinopathy into a single "pathological" class for a binary referral decision, a fuller clinical-impact write-up, and a dedicated discussion of the synthetic-report leakage risk described above.
+

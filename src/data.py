@@ -10,6 +10,8 @@ import re
 import shutil
 import numpy as np
 import pandas as pd
+import tensorflow as tf
+from contextlib import contextmanager
 from PIL import Image, ImageOps
 from pathlib import Path
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
@@ -145,6 +147,58 @@ def guardar_modelo(nome, models_dir, modelo):
         modelo.save_weights(pesos)
         return pesos
     return destino
+
+@tf.keras.saving.register_keras_serializable(package="ophthalmic")
+def resnet50_preprocess(img):
+    """ResNet50 preprocessing (RGB->BGR + per-channel mean subtraction) as a
+    named, registered function.
+
+    Used instead of an inline `lambda` inside `layers.Lambda`: an anonymous
+    lambda is pickled into the .keras file and refuses to deserialise unless
+    the caller opts into `safe_mode=False`. A registered function is saved by
+    name and resolves automatically wherever `src.data` is imported.
+    """
+    return tf.keras.applications.resnet50.preprocess_input(img)
+
+
+@contextmanager
+def _lambda_shape_fallback():
+    """Make `Lambda` layers without an `output_shape` deserialisable.
+
+    Keras 3 rebuilds a Lambda by tracing its function over a symbolic input;
+    `resnet50.preprocess_input` cannot be traced that way, so the load aborts
+    with NotImplementedError ("We could not automatically infer the shape of
+    the Lambda's output"). The preprocessing is element-wise and therefore
+    shape-preserving, so falling back to the input shape reconstructs exactly
+    the graph that was trained. Only needed for models saved before
+    `resnet50_preprocess` / an explicit `output_shape` existed.
+    """
+    original = tf.keras.layers.Lambda.compute_output_shape
+
+    def compute_output_shape(self, input_shape):
+        try:
+            return original(self, input_shape)
+        except NotImplementedError:
+            return input_shape
+
+    tf.keras.layers.Lambda.compute_output_shape = compute_output_shape
+    try:
+        yield
+    finally:
+        tf.keras.layers.Lambda.compute_output_shape = original
+
+
+def carregar_modelo(nome, models_dir, compile=False):
+    """Load artifacts/models/{slug(nome)}.keras, tolerating the legacy Lambda.
+
+    `safe_mode=False` is required for the older transfer-learning checkpoints,
+    which embed the preprocessing as an anonymous lambda; it executes code
+    from the file, so it is only safe because these are our own artefacts.
+    """
+    caminho = Path(models_dir) / f"{slug(nome)}.keras"
+    with _lambda_shape_fallback():
+        return tf.keras.models.load_model(caminho, compile=compile, safe_mode=False)
+
 
 def load_split_indices(path):
     npz = np.load(path)
