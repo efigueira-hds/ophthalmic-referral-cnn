@@ -148,7 +148,7 @@ def guardar_modelo(nome, models_dir, modelo):
         return pesos
     return destino
 
-@tf.keras.saving.register_keras_serializable(package="ophthalmic")
+@tf.keras.utils.register_keras_serializable(package="ophthalmic")
 def resnet50_preprocess(img):
     """ResNet50 preprocessing (RGB->BGR + per-channel mean subtraction) as a
     named, registered function.
@@ -157,6 +157,12 @@ def resnet50_preprocess(img):
     lambda is pickled into the .keras file and refuses to deserialise unless
     the caller opts into `safe_mode=False`. A registered function is saved by
     name and resolves automatically wherever `src.data` is imported.
+
+    Registered through `tf.keras.utils` rather than `tf.keras.saving`: from
+    TF 2.21 the `tf.keras` shim is a lazy loader that re-exports only part of
+    the Keras 3 namespace, and `saving` is not among them -- the `saving`
+    spelling imports on Colab but raises AttributeError locally. `utils` holds
+    the identical function object and exists in both runtimes.
     """
     return tf.keras.applications.resnet50.preprocess_input(img)
 
