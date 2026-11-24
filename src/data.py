@@ -7,11 +7,14 @@ original inline code -- same values, now importable and shared.
 """
 import os
 import re
-from pathlib import Path
-
+import shutil
 import numpy as np
 import pandas as pd
+import tensorflow as tf
+from contextlib import contextmanager
 from PIL import Image, ImageOps
+from pathlib import Path
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, recall_score
 from sklearn.preprocessing import label_binarize
@@ -131,6 +134,77 @@ def save_split_indices(path, split):
         val_idx=split["val_idx"],
     )
 
+def guardar_modelo(nome, models_dir, modelo):
+    destino = Path(models_dir) / f"{slug(nome)}.keras"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        modelo.save(destino)
+    except Exception as e:
+        # Modelos com BERT embebido resistem à serialização .keras;
+        # cai para os pesos, que chegam para inferência e Grad-CAM.
+        print(f"  .save() falhou ({type(e).__name__}); a gravar só pesos.")
+        pesos = destino.with_suffix(".weights.h5")
+        modelo.save_weights(pesos)
+        return pesos
+    return destino
+
+@tf.keras.utils.register_keras_serializable(package="ophthalmic")
+def resnet50_preprocess(img):
+    """ResNet50 preprocessing (RGB->BGR + per-channel mean subtraction) as a
+    named, registered function.
+
+    Used instead of an inline `lambda` inside `layers.Lambda`: an anonymous
+    lambda is pickled into the .keras file and refuses to deserialise unless
+    the caller opts into `safe_mode=False`. A registered function is saved by
+    name and resolves automatically wherever `src.data` is imported.
+
+    Registered through `tf.keras.utils` rather than `tf.keras.saving`: from
+    TF 2.21 the `tf.keras` shim is a lazy loader that re-exports only part of
+    the Keras 3 namespace, and `saving` is not among them -- the `saving`
+    spelling imports on Colab but raises AttributeError locally. `utils` holds
+    the identical function object and exists in both runtimes.
+    """
+    return tf.keras.applications.resnet50.preprocess_input(img)
+
+
+@contextmanager
+def _lambda_shape_fallback():
+    """Make `Lambda` layers without an `output_shape` deserialisable.
+
+    Keras 3 rebuilds a Lambda by tracing its function over a symbolic input;
+    `resnet50.preprocess_input` cannot be traced that way, so the load aborts
+    with NotImplementedError ("We could not automatically infer the shape of
+    the Lambda's output"). The preprocessing is element-wise and therefore
+    shape-preserving, so falling back to the input shape reconstructs exactly
+    the graph that was trained. Only needed for models saved before
+    `resnet50_preprocess` / an explicit `output_shape` existed.
+    """
+    original = tf.keras.layers.Lambda.compute_output_shape
+
+    def compute_output_shape(self, input_shape):
+        try:
+            return original(self, input_shape)
+        except NotImplementedError:
+            return input_shape
+
+    tf.keras.layers.Lambda.compute_output_shape = compute_output_shape
+    try:
+        yield
+    finally:
+        tf.keras.layers.Lambda.compute_output_shape = original
+
+
+def carregar_modelo(nome, models_dir, compile=False):
+    """Load artifacts/models/{slug(nome)}.keras, tolerating the legacy Lambda.
+
+    `safe_mode=False` is required for the older transfer-learning checkpoints,
+    which embed the preprocessing as an anonymous lambda; it executes code
+    from the file, so it is only safe because these are our own artefacts.
+    """
+    caminho = Path(models_dir) / f"{slug(nome)}.keras"
+    with _lambda_shape_fallback():
+        return tf.keras.models.load_model(caminho, compile=compile, safe_mode=False)
+
 
 def load_split_indices(path):
     npz = np.load(path)
@@ -214,3 +288,7 @@ def append_results_row(row, results_path):
         df = pd.DataFrame([row])
     df.to_csv(results_path, index=False)
     return df
+
+
+
+
